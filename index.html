@@ -1,0 +1,357 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Payments Sandbox Demo</title>
+<!--
+  Checkout.com SANDBOX demo. Served by server.py (run: py server.py).
+    Direct API  : browser tokenizes card with the PUBLIC key -> backend POST /payments (secret key)
+    Hosted Page : backend POST /hosted-payments -> redirect to Checkout's hosted page
+    Payment Link: backend POST /payment-links  -> shareable URL
+  The secret key lives only in .env / server.py.
+-->
+<style>
+  :root {
+    --bg: #f5f6f8; --card: #fff; --text: #1d2330; --muted: #6b7280;
+    --border: #e2e5ea; --accent: #2f5bea; --ok: #16a34a; --warn: #d97706; --err: #dc2626;
+    --code-bg: #0f172a; --code-text: #e2e8f0;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0f1117; --card: #181b23; --text: #e6e8ee; --muted: #9aa1ad; --border: #2a2f3a; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 15px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background: var(--bg); color: var(--text); }
+  header { padding: 20px 16px; border-bottom: 1px solid var(--border); background: var(--card); }
+  header h1 { margin: 0; font-size: 20px; }
+  header p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 99px; background: var(--warn); color: #fff; font-size: 11px; font-weight: 600; margin-left: 8px; vertical-align: middle; }
+  main { max-width: 1100px; margin: 0 auto; padding: 16px; display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 800px) { main { grid-template-columns: 1fr; } }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+  .tabs { display: flex; gap: 4px; margin-bottom: 16px; flex-wrap: wrap; }
+  .tabs button { flex: 1; padding: 8px; border: 1px solid var(--border); background: transparent; color: var(--text); border-radius: 6px; cursor: pointer; }
+  .tabs button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .panel { display: none; } .panel.active { display: block; }
+  label { display: block; font-size: 13px; color: var(--muted); margin: 10px 0 4px; }
+  input, select { width: 100%; padding: 9px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); font: inherit; }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .btn { margin-top: 14px; width: 100%; padding: 11px; border: 0; border-radius: 6px; background: var(--accent); color: #fff; font-weight: 600; cursor: pointer; }
+  .btn:disabled { opacity: .5; cursor: wait; }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 8px; }
+  .status { margin-top: 12px; padding: 10px; border-radius: 6px; font-size: 14px; display: none; word-break: break-word; }
+  .status.ok { display: block; background: color-mix(in srgb, var(--ok) 15%, transparent); color: var(--ok); }
+  .status.err { display: block; background: color-mix(in srgb, var(--err) 15%, transparent); color: var(--err); }
+  .status.info { display: block; background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); }
+  .log { background: var(--code-bg); color: var(--code-text); border-radius: 8px; padding: 12px; font: 12px/1.45 ui-monospace, Consolas, monospace; height: 560px; overflow: auto; white-space: pre-wrap; word-break: break-word; }
+  .log .req { color: #93c5fd; } .log .res { color: #86efac; } .log .evt { color: #fcd34d; } .log .bad { color: #fca5a5; }
+  .log-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  .log-head h2 { font-size: 15px; margin: 0; }
+  .link-box { margin-top: 12px; padding: 10px; border: 1px dashed var(--border); border-radius: 6px; word-break: break-all; font-size: 13px; display: none; }
+  .link-box a { color: var(--accent); }
+  .billing { border: 1px solid var(--border); border-radius: 8px; padding: 4px 12px 12px; margin-bottom: 16px; }
+  .billing summary { cursor: pointer; font-weight: 600; font-size: 13px; padding: 8px 0; }
+  .flow-container:not(:empty) { margin-top: 14px; padding: 12px; border-radius: 8px; background: #fff; }
+  .link-btn { background: none; border: 0; color: var(--muted); text-decoration: underline; cursor: pointer; padding: 0; margin-right: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Payments Sandbox Demo <span class="badge">CHECKOUT.COM SANDBOX</span></h1>
+  <p>Direct API payment, hosted payment page, and payment links against your sandbox account. Use test cards only.</p>
+</header>
+
+<main>
+  <section class="card">
+    <!-- Customer & billing details: sent with every payment request, whichever tab is used -->
+    <details class="billing" open>
+      <summary>Customer &amp; billing details (sent with every request)</summary>
+      <div class="row">
+        <div><label>Name</label><input id="b-name" value="Jane Doe"></div>
+        <div><label>Email</label><input id="b-email" type="email" value="jane@example.com"></div>
+      </div>
+      <label>Address line 1</label>
+      <input id="b-line1" value="123 Market Street">
+      <div class="row">
+        <div><label>City</label><input id="b-city" value="San Francisco"></div>
+        <div><label>State / region</label><input id="b-state" value="CA"></div>
+      </div>
+      <div class="row">
+        <div><label>ZIP / postcode</label><input id="b-zip" value="94105"></div>
+        <div><label>Country</label>
+          <select id="b-country">
+            <option value="US">United States</option><option value="GB">United Kingdom</option>
+            <option value="SG">Singapore</option><option value="DE">Germany</option>
+          </select>
+        </div>
+      </div>
+    </details>
+
+    <div class="tabs">
+      <button data-tab="direct" class="active">Direct API</button>
+      <button data-tab="flow">Flow</button>
+      <button data-tab="hpp">Hosted Page</button>
+      <button data-tab="links">Payment Links</button>
+    </div>
+
+    <!-- 1. Direct API: tokenize card in browser (public key), pay from backend (secret key) -->
+    <div class="panel active" id="panel-direct">
+      <div class="row">
+        <div><label>Amount</label><input id="d-amount" type="number" value="25.00" step="0.01"></div>
+        <div><label>Currency</label><select id="d-currency"><option>USD</option><option>EUR</option><option>GBP</option></select></div>
+      </div>
+      <label>Card number (test)</label>
+      <input id="d-card" value="4242 4242 4242 4242">
+      <div class="row">
+        <div><label>Expiry (MM/YY)</label><input id="d-exp" value="12/30"></div>
+        <div><label>CVV</label><input id="d-cvv" value="100"></div>
+      </div>
+      <label><input id="d-3ds" type="checkbox" checked style="width:auto"> Request 3D Secure</label>
+      <button class="btn" id="d-pay">Pay</button>
+      <div class="hint">Sandbox test card: 4242 4242 4242 4242 · any future expiry · CVV 100. With 3DS on you'll be redirected to the sandbox challenge page.</div>
+      <div class="status" id="d-status"></div>
+    </div>
+
+    <!-- 2. Flow: backend creates a payment session, Checkout's embedded component collects payment -->
+    <div class="panel" id="panel-flow">
+      <div class="row">
+        <div><label>Amount</label><input id="f-amount" type="number" value="25.00" step="0.01"></div>
+        <div><label>Currency</label><select id="f-currency"><option>USD</option><option>EUR</option><option>GBP</option></select></div>
+      </div>
+      <button class="btn" id="f-load">Load payment form</button>
+      <div id="flow-container" class="flow-container"></div>
+      <div class="hint">Flow renders Checkout.com's own card fields (and wallets/local methods when enabled) and handles 3DS. Test card 4242 4242 4242 4242, any future expiry, CVV 100.</div>
+      <div class="status" id="f-status"></div>
+    </div>
+
+    <!-- 3. Hosted Payment Page -->
+    <div class="panel" id="panel-hpp">
+      <label>Product</label>
+      <select id="h-product">
+        <option value="4900">Pro plan — $49.00</option>
+        <option value="1500">Starter plan — $15.00</option>
+        <option value="12000">Team plan — $120.00</option>
+      </select>
+      <button class="btn" id="h-create">Checkout with hosted page</button>
+      <div class="hint">Creates a session and redirects to Checkout.com's hosted page, which returns here on success, failure or cancel.</div>
+      <div class="status" id="h-status"></div>
+    </div>
+
+    <!-- 4. Payment Links -->
+    <div class="panel" id="panel-links">
+      <label>Description</label>
+      <input id="l-desc" value="Invoice #1042 — Consulting">
+      <div class="row">
+        <div><label>Amount (USD)</label><input id="l-amount" type="number" value="300.00" step="0.01"></div>
+        <div><label>Expires in</label><select id="l-exp"><option value="1">1 day</option><option value="7" selected>7 days</option><option value="30">30 days</option></select></div>
+      </div>
+      <button class="btn" id="l-create">Create payment link</button>
+      <div class="link-box" id="l-box"></div>
+      <div class="status" id="l-status"></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="log-head"><h2>API log</h2><button class="link-btn" id="clear-log">clear</button></div>
+    <div class="log" id="log"></div>
+  </section>
+</main>
+
+<!-- Checkout.com web components (Flow) -->
+<script src="https://checkout-web-components.checkout.com/index.js"></script>
+<script>
+/* ---------------- Helpers ---------------- */
+const $ = (s) => document.getElementById(s);
+const toMinor = (v) => Math.round(parseFloat(v) * 100);
+const fmt = (minor, cur) => new Intl.NumberFormat(undefined, { style: 'currency', currency: cur }).format(minor / 100);
+const LOG_KEY = 'cko-demo-log';
+
+// The log is kept in sessionStorage so it survives redirects to Checkout and back
+function log(kind, title, body) {
+  const entry = { kind, text: `${kind === 'req' ? '→' : kind === 'evt' ? '⚡' : '←'} ${title}\n${JSON.stringify(body, null, 2)}` };
+  renderLog(entry);
+  try {
+    const all = JSON.parse(sessionStorage.getItem(LOG_KEY) || '[]');
+    all.push(entry); sessionStorage.setItem(LOG_KEY, JSON.stringify(all.slice(-50)));
+  } catch {}
+}
+function renderLog({ kind, text }) {
+  const el = $('log'), line = document.createElement('div');
+  line.className = kind; line.textContent = '\n' + text;
+  el.appendChild(line); el.scrollTop = el.scrollHeight;
+}
+try { JSON.parse(sessionStorage.getItem(LOG_KEY) || '[]').forEach(renderLog); } catch {}
+$('clear-log').onclick = () => { $('log').textContent = ''; try { sessionStorage.removeItem(LOG_KEY); } catch {} };
+
+async function api(method, url, body, headers = {}) {
+  const shown = url.startsWith('http') ? url : url.replace(/^\/api/, '');
+  log('req', `${method} ${shown}`, body ?? {});
+  let res;
+  try {
+    res = await fetch(url, {
+      method, headers: { 'Content-Type': 'application/json', ...headers },
+      body: body ? JSON.stringify(body) : undefined
+    });
+  } catch (err) {
+    // fetch only throws on network failure: no response from server.py (or Checkout)
+    const where = url.startsWith('http') ? 'Checkout.com' : 'server.py — is it running? (py server.py)';
+    log('bad', `NETWORK ERROR ${shown}`, { error: err.message, page: location.href });
+    throw new Error(`Could not reach ${where}`);
+  }
+  const json = await res.json().catch(() => ({}));
+  log(res.ok ? 'res' : 'bad', `${res.status} ${shown}`, json);
+  if (!res.ok) throw new Error(json.error_codes?.join(', ') || json.error || `HTTP ${res.status}`);
+  return { status: res.status, body: json };
+}
+function status(elId, cls, msg) { const e = $(elId); e.className = 'status ' + cls; e.textContent = msg; }
+async function busy(btn, elId, fn) {
+  btn.disabled = true;
+  try { await fn(); } catch (err) { status(elId, 'err', 'Error: ' + err.message); } finally { btn.disabled = false; }
+}
+function showTab(name) {
+  document.querySelectorAll('.tabs button').forEach(x => x.classList.toggle('active', x.dataset.tab === name));
+  document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === 'panel-' + name));
+}
+document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => showTab(b.dataset.tab));
+
+// Opened by double-clicking the file: /api/* can't work, so say so up front
+if (location.protocol === 'file:') {
+  ['d-status', 'f-status', 'h-status', 'l-status'].forEach(id => status(id, 'err',
+    'This page was opened as a file. Run "py server.py" in the payment-demo folder and open http://localhost:8000 instead.'));
+  document.querySelectorAll('.btn').forEach(b => b.disabled = true);
+}
+
+// Customer + billing address from the shared form. Spread into every payment request body.
+const billing = () => ({
+  customer: { name: $('b-name').value, email: $('b-email').value },
+  billing: { address: {
+    address_line1: $('b-line1').value, city: $('b-city').value, state: $('b-state').value,
+    zip: $('b-zip').value, country: $('b-country').value
+  } }
+});
+
+let config;
+const configReady = fetch('/api/config').then(r => r.json()).then(c => config = c).catch(() => {});
+
+/* ---------------- Flow 1: Direct API ---------------- */
+$('d-pay').onclick = (e) => busy(e.target, 'd-status', async () => {
+  await configReady;
+  const amount = toMinor($('d-amount').value), currency = $('d-currency').value;
+  const [mm, yy] = $('d-exp').value.split('/').map(s => parseInt(s, 10));
+
+  // Step 1 (browser, public key): card details -> single-use token. Card data never reaches server.py.
+  // In production use Checkout.com Flow or Frames instead of a hand-built form, to stay in the lowest PCI scope.
+  status('d-status', 'info', 'Tokenizing card…');
+  const tok = await api('POST', `${config.apiUrl}/tokens`, {
+    type: 'card', number: $('d-card').value.replace(/\s/g, ''),
+    expiry_month: mm, expiry_year: 2000 + (yy % 100), cvv: $('d-cvv').value
+  }, { Authorization: `Bearer ${config.publicKey}` });
+
+  // Step 2 (backend, secret key): charge the token
+  status('d-status', 'info', 'Requesting payment…');
+  const pay = await api('POST', '/api/payments', {
+    token: tok.body.token, amount, currency, reference: 'ORD-' + Date.now(), threeDs: $('d-3ds').checked,
+    ...billing()
+  });
+
+  const redirect = pay.body._links?.redirect?.href;
+  if (pay.status === 202 && redirect) {
+    status('d-status', 'info', 'Redirecting to 3DS challenge…');
+    log('evt', 'REDIRECT', { to: redirect });
+    return location.assign(redirect);
+  }
+  status('d-status', pay.body.approved ? 'ok' : 'err',
+    `${pay.body.status}: ${fmt(amount, currency)} · ${pay.body.response_summary || ''} · ${pay.body.id}`);
+});
+
+/* ---------------- Flow 2: Checkout.com Flow ---------------- */
+$('f-load').onclick = (e) => busy(e.target, 'f-status', async () => {
+  await configReady;
+  if (typeof CheckoutWebComponents !== 'function') throw new Error('Flow script failed to load (check your internet connection)');
+  const amount = toMinor($('f-amount').value), currency = $('f-currency').value;
+
+  // Step 1 (backend, secret key): create a payment session
+  const session = await api('POST', '/api/payment-sessions', {
+    amount, currency, reference: 'ORD-' + Date.now(), ...billing()
+  });
+
+  // Step 2 (browser, public key): mount Flow with that session. Flow submits the payment itself.
+  const checkout = await CheckoutWebComponents({
+    publicKey: config.publicKey,
+    environment: 'sandbox',
+    locale: 'en',
+    paymentSession: session.body,
+    onPaymentCompleted: async (_component, paymentResponse) => {
+      log('evt', 'FLOW onPaymentCompleted', paymentResponse);
+      // Confirm the outcome from the backend instead of trusting the browser
+      const p = (await api('GET', `/api/payments/${encodeURIComponent(paymentResponse.id)}`)).body;
+      status('f-status', p.approved ? 'ok' : 'err', `${p.status}: ${fmt(p.amount, p.currency)} · ${p.id}`);
+    },
+    onError: (_component, error) => {
+      log('bad', 'FLOW onError', { code: error?.code, type: error?.type, message: error?.message });
+      status('f-status', 'err', 'Payment failed: ' + (error?.message || 'see API log'));
+    }
+  });
+  $('flow-container').innerHTML = '';
+  checkout.create('flow').mount('#flow-container');
+  status('f-status', 'info', `Payment form loaded for ${fmt(amount, currency)}. Enter the test card and press Pay.`);
+});
+
+/* ---------------- Flow 3: Hosted Payment Page ---------------- */
+$('h-create').onclick = (e) => busy(e.target, 'h-status', async () => {
+  const sel = $('h-product');
+  const res = await api('POST', '/api/hosted-payments', {
+    amount: +sel.value, currency: 'USD', reference: 'ORD-' + Date.now(),
+    description: sel.options[sel.selectedIndex].text, ...billing()
+  });
+  status('h-status', 'info', 'Redirecting to hosted payment page…');
+  log('evt', 'REDIRECT', { to: res.body._links.redirect.href });
+  location.assign(res.body._links.redirect.href);
+});
+
+/* ---------------- Flow 4: Payment Links ---------------- */
+$('l-create').onclick = (e) => busy(e.target, 'l-status', async () => {
+  const days = +$('l-exp').value;
+  const res = await api('POST', '/api/payment-links', {
+    amount: toMinor($('l-amount').value), currency: 'USD', reference: 'INV-' + Date.now(),
+    description: $('l-desc').value, expiresIn: days * 86400, ...billing()
+  });
+  const href = res.body._links.redirect.href;
+  const box = $('l-box'); box.style.display = 'block';
+  box.innerHTML = '<strong>Share this link:</strong><br>';
+  const a = document.createElement('a'); a.href = href; a.textContent = href; a.target = '_blank'; a.rel = 'noopener';
+  const copy = document.createElement('button'); copy.className = 'link-btn'; copy.textContent = 'copy';
+  copy.onclick = () => navigator.clipboard?.writeText(href).then(() => copy.textContent = 'copied');
+  box.append(a, document.createElement('br'), copy);
+  status('l-status', 'info', `Link ${res.body.id} active until ${new Date(res.body.expires_on).toLocaleString()}`);
+});
+
+/* ---------------- Returning from Checkout.com ---------------- */
+// Checkout appends cko-session-id (3DS) or cko-payment-id (hosted page / link) to our return URLs.
+(async () => {
+  const q = new URLSearchParams(location.search);
+  const flow = q.get('flow');
+  if (!flow) return;
+  showTab(flow);
+  const target = { direct: 'd-status', flow: 'f-status', hpp: 'h-status', links: 'l-status' }[flow];
+  const id = q.get('cko-session-id') || q.get('cko-payment-id');
+  history.replaceState(null, '', '/');
+  log('evt', 'RETURNED FROM CHECKOUT', Object.fromEntries(q));
+
+  if (q.get('result') === 'cancel') return status(target, 'err', 'Customer cancelled on the hosted page.');
+  if (!id) return status(target, q.get('result') === 'failure' ? 'err' : 'info', `Returned with result: ${q.get('result')}`);
+  // The payment can take a moment to become retrievable right after the redirect, so retry a few times
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const p = (await api('GET', `/api/payments/${encodeURIComponent(id)}`)).body;
+      return status(target, p.approved ? 'ok' : 'err', `${p.status}: ${fmt(p.amount, p.currency)} · ${p.id}`);
+    } catch (err) {
+      if (attempt >= 4) return status(target, 'err', `Could not look up payment ${id}: ${err.message}`);
+      status(target, 'info', `Looking up payment ${id}… (attempt ${attempt + 1})`);
+      await new Promise(r => setTimeout(r, 1500));
+    }
+  }
+})();
+</script>
+</body>
+</html>
