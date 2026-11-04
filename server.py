@@ -1,6 +1,4 @@
 """
-Minimal backend for the Checkout.com sandbox demo (Python stdlib only).
-
 The secret key stays here. The browser only ever sees the public key, which it
 uses to tokenize card details directly with Checkout.com.
 
